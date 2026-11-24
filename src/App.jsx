@@ -11157,7 +11157,6 @@ const createQuote = (payload) => {
                                         setEditingInvoiceId(created.id);
                                       }
                                     }
-                                    }
                                     setPaymentForm({
                                       date: new Date().toISOString().slice(0, 10),
                                       amount: String(balanceDue || totalAmt),
@@ -11325,6 +11324,7 @@ const createQuote = (payload) => {
             )}
 
             {/* 3. INVOICE DOCUMENT PREVIEW / PRINT / EMAIL MODAL (Screenshot 9) */}
+            {/* 3. INVOICE DOCUMENT PREVIEW / PRINT / EMAIL MODAL (Screenshot 9) */}
             {previewInvoice && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 overflow-y-auto">
                 <div className="bg-white rounded-[4px] border border-gray-200 shadow-2xl w-full max-w-[920px] p-6 relative my-8">
@@ -11341,18 +11341,18 @@ const createQuote = (payload) => {
                     <div className="md:col-span-8 border border-gray-300 bg-white p-7 shadow-inner max-h-[75vh] overflow-y-auto text-xs text-gray-800 space-y-6">
                       {(() => {
                         const cust = state.customers.find(
-                       (c) => c.id === previewInvoice.customerId
-                     );
-                     const tplGlobal = {
-                       ...(state.company?.documentTemplate?.global || {}),
-                       ...(previewInvoice.customTemplate?.global || {}),
-                     };
-                     const tplDoc = {
-                       ...(DEFAULT_DOC_TYPE_OVERRIDES.invoice || {}),
-                       ...(state.company?.documentTemplate?.docs?.invoice || {}),
-                       ...(previewInvoice.customTemplate?.doc || {}),
-                     };
-                     const headerBg = tplGlobal.colorScheme || '#EFEFEF';
+                          (c) => c.id === previewInvoice.customerId
+                        );
+                        const tplGlobal = {
+                          ...(state.company?.documentTemplate?.global || {}),
+                          ...(previewInvoice.customTemplate?.global || {}),
+                        };
+                        const tplDoc = {
+                          ...(DEFAULT_DOC_TYPE_OVERRIDES.invoice || {}),
+                          ...(state.company?.documentTemplate?.docs?.invoice || {}),
+                          ...(previewInvoice.customTemplate?.doc || {}),
+                        };
+                        const headerBg = tplGlobal.colorScheme || '#EFEFEF';
                         const currency = state.company?.currency || '₹';
                         const balDue = Math.max(
                           0,
@@ -11623,6 +11623,8 @@ const createQuote = (payload) => {
                             </div>
                           </div>
                         );
+                      })()}
+                    </div>
 
                     {/* Right Action Sidebar (Email, Print, Download, Customise) */}
                     <div className="md:col-span-4 space-y-3 pt-1">
@@ -11656,18 +11658,19 @@ const createQuote = (payload) => {
                       <div className="border-t border-gray-200 my-3" />
 
                       <button
-                     type="button"
-                     onClick={() => openCustomiseDocumentModal('invoice', previewInvoice)}
-                     className="w-full py-2.5 px-4 bg-white hover:bg-gray-50 border border-gray-300 text-[#4285F4] text-xs font-medium rounded-[3px] flex items-center justify-center gap-3 cursor-pointer"
-                   >
-                     <Pencil className="w-4 h-4" />
-                     <span>Customise this document</span>
-                   </button>
+                        type="button"
+                        onClick={() => openCustomiseDocumentModal('invoice', previewInvoice)}
+                        className="w-full py-2.5 px-4 bg-white hover:bg-gray-50 border border-gray-300 text-[#4285F4] text-xs font-medium rounded-[3px] flex items-center justify-center gap-3 cursor-pointer"
+                      >
+                        <Pencil className="w-4 h-4" />
+                        <span>Customise this document</span>
+                      </button>
                     </div>
                   </div>
                 </div>
               </div>
             )}
+
 
             {/* 4. RECEIVE PAYMENT DUE MODAL (FROM EDITOR PAGE 2) */}
             <Modal
@@ -11914,75 +11917,6 @@ const createQuote = (payload) => {
             </Modal>
           </>
         )}
-
-            {subTab === 'payments' && (
-              <>
-                <OneUpPageHeader title="Payments Received" />
-                <div className="bg-white border border-gray-200 rounded-[4px] overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-gray-200 bg-gray-50/70 text-gray-500">
-                        <th className="py-3 px-4 font-medium">Payment #</th>
-                        <th className="py-3 px-4 font-medium">Invoice</th>
-                        <th className="py-3 px-4 font-medium">Customer</th>
-                        <th className="py-3 px-4 font-medium">Date</th>
-                        <th className="py-3 px-4 font-medium">Method</th>
-                        <th className="py-3 px-4 font-medium text-right">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {state.paymentsReceived.map((p) => {
-                        const cust = state.customers.find((c) => c.id === p.customerId);
-                        return (
-                          <tr key={p.id}>
-                            <td className="py-3 px-4 font-medium text-gray-800">{p.id}</td>
-                            <td className="py-3 px-4 text-[#4285F4]">{p.invoiceId}</td>
-                            <td className="py-3 px-4 text-gray-700">{cust?.name || p.customerId}</td>
-                            <td className="py-3 px-4 text-gray-500">{p.date}</td>
-                            <td className="py-3 px-4 text-gray-600">{p.method}</td>
-                            <td className="py-3 px-4 text-right font-semibold text-emerald-700">
-                              {formatAmount(p.amount)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {state.paymentsReceived.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="py-10 text-center text-gray-400">
-                            No payments recorded.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-
-            {subTab === 'credits' && (
-              <>
-                <OneUpPageHeader title="Credit Notes & Returns" />
-                <div className="bg-white border border-gray-200 rounded-[4px] p-6 text-xs text-gray-600">
-                  Credited Invoices automatically reverse Revenue/Tax in the General Ledger and
-                  restock returned items into your Main Warehouse.
-                  <div className="mt-4 divide-y divide-gray-100 border border-gray-200 rounded">
-                    {state.invoices
-                      .filter((i) => i.status === 'Credited')
-                      .map((i) => (
-                        <div key={i.id} className="p-3 flex justify-between">
-                          <span className="font-medium text-gray-800">CN-{i.id}</span>
-                          <span>{formatAmount(i.total)}</span>
-                        </div>
-                      ))}
-                    {state.invoices.filter((i) => i.status === 'Credited').length === 0 && (
-                      <div className="p-6 text-center text-gray-400">
-                        No credit notes issued yet.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </>
-            )}
           </div>
         )}
 
