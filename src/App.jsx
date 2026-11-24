@@ -11796,40 +11796,42 @@ const createQuote = (payload) => {
             >
               <div className="space-y-3 text-xs">
                 {convertModalType === 'quotes' &&
-                  (state.quotes.length === 0 ? (
-                    <div className="py-6 text-center text-gray-400">No quotes available.</div>
+                  (state.quotes.filter((qt) => qt.status !== 'Converted' && qt.status !== 'Cancelled')
+                    .length === 0 ? (
+                    <div className="py-6 text-center text-gray-400">
+                      No open quotes available to convert.
+                    </div>
                   ) : (
-                    state.quotes.map((qt) => {
-                      const cust = state.customers.find((c) => c.id === qt.customerId);
-                      return (
-                        <div
-                          key={qt.id}
-                          className="p-3 border border-gray-200 rounded flex items-center justify-between"
-                        >
-                          <div>
-                            <div className="font-semibold text-gray-800">
-                              {qt.id} — {cust?.name || qt.customerId}
-                            </div>
-                            <div className="text-gray-400">{qt.date}</div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const created = createInvoice({
-                                customerId: qt.customerId,
-                                items: qt.items || [],
-                                discountPct: qt.discountPct || 0,
-                              });
-                              setConvertModalType(null);
-                              if (created) openExistingInvoiceEditor(created, 1);
-                            }}
-                            className="px-3 py-1.5 bg-[#4285F4] text-white font-medium rounded cursor-pointer"
+                    state.quotes
+                      .filter((qt) => qt.status !== 'Converted' && qt.status !== 'Cancelled')
+                      .map((qt) => {
+                        const cust = state.customers.find((c) => c.id === qt.customerId);
+                        const lead = state.leads.find((l) => l.id === qt.customerId);
+                        return (
+                          <div
+                            key={qt.id}
+                            className="p-3 border border-gray-200 rounded flex items-center justify-between"
                           >
-                            Convert to Invoice
-                          </button>
-                        </div>
-                      );
-                    })
+                            <div>
+                              <div className="font-semibold text-gray-800">
+                                {qt.id} — {cust?.name || lead?.company || qt.customerName || qt.customerId}
+                              </div>
+                              <div className="text-gray-400">{qt.date}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const created = convertQuoteToInvoice(qt.id);
+                                setConvertModalType(null);
+                                if (created) openExistingInvoiceEditor(created, 1);
+                              }}
+                              className="px-3 py-1.5 bg-[#4285F4] text-white font-medium rounded cursor-pointer"
+                            >
+                              Convert to Invoice
+                            </button>
+                          </div>
+                        );
+                      })
                   ))}
 
                 {convertModalType === 'orders' &&
@@ -12722,7 +12724,7 @@ const createQuote = (payload) => {
 
   function InventoryView({ subTab, setSubTab, quickAction }) {
     const {
-      state, formatAmount, enrichedProducts, addProduct, transferStock, createPurchaseOrder, receivePurchaseOrder, convertPOToBill,
+      state, formatAmount, notify, enrichedProducts, addProduct, transferStock, createPurchaseOrder, receivePurchaseOrder, convertPOToBill,
       createSalesOrder, advanceFulfillment, createInvoice,
     } = useERP();
 
@@ -12784,7 +12786,7 @@ const submitPurchaseOrder = (e) => {
 
     useEffect(() => {
       if (quickAction === 'product') setModal('product');
-      if (quickAction === 'po') setModal('po');
+      if (quickAction === 'po') openNewPOModal();
     }, [quickAction]);
 
     return (
@@ -12852,7 +12854,7 @@ const submitPurchaseOrder = (e) => {
 
           {subTab === 'po' && (
             <>
-              <OneUpPageHeader title="Purchase Orders" primaryButtonLabel="New Purchase Order" onPrimaryClick={() => setModal('po')} />
+              <OneUpPageHeader title="Purchase Orders" primaryButtonLabel="New Purchase Order" onPrimaryClick={openNewPOModal} />
               <div className="bg-white border border-gray-200 rounded-[4px] overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead>
@@ -13191,26 +13193,84 @@ const submitPurchaseOrder = (e) => {
           )}
         </Modal>
 
-        <Modal open={modal === 'po'} onClose={() => setModal(null)} title="New Purchase Order">
-          {state.products.length === 0 ? (
-            <div className="text-xs text-gray-600">Add a product in Stock first to create a Purchase Order.</div>
+        <Modal open={poModalOpen} onClose={() => setPoModalOpen(false)} title="New Purchase Order">
+          {state.products.length === 0 || state.vendors.length === 0 ? (
+            <div className="text-xs text-gray-600">
+              Add at least one Supplier and one Product first to create a Purchase Order.
+            </div>
           ) : (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const prod = state.products[0];
-                createPurchaseOrder({
-                  vendorId: state.vendors[0]?.id || 'SUP-001',
-                  items: [{ productId: prod.id, qty: 15, unitCost: prod.cost }],
-                });
-                setModal(null);
-              }}
-              className="space-y-3 text-xs"
-            >
-              <p className="text-gray-600">Create a Purchase Order for <strong>{state.vendors[0]?.name || 'Supplier'}</strong> ({state.products[0]?.name}).</p>
+            <form onSubmit={submitPurchaseOrder} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-medium mb-1">Supplier</label>
+                <select
+                  value={poVendorId}
+                  onChange={(e) => setPoVendorId(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded"
+                >
+                  {state.vendors.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name} ({v.id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-12 gap-3">
+                <div className="col-span-6">
+                  <label className="block font-medium mb-1">Product</label>
+                  <select
+                    value={poProductId}
+                    onChange={(e) => {
+                      const prod = state.products.find((p) => p.id === e.target.value);
+                      setPoProductId(e.target.value);
+                      if (prod) setPoUnitCost(Number(prod.cost ?? prod.buyPrice ?? 0));
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded"
+                  >
+                    {state.products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.sku} — {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="col-span-3">
+                  <label className="block font-medium mb-1">Qty</label>
+                  <input
+                    type="number"
+                    min={1}
+                    required
+                    value={poQty}
+                    onChange={(e) => setPoQty(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded"
+                  />
+                </div>
+                <div className="col-span-3">
+                  <label className="block font-medium mb-1">Unit Cost</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    required
+                    value={poUnitCost}
+                    onChange={(e) => setPoUnitCost(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded"
+                  />
+                </div>
+              </div>
               <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setModal(null)} className="px-4 py-2 text-gray-600">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-[#4285F4] text-white font-medium rounded">Send Purchase Order</button>
+                <button
+                  type="button"
+                  onClick={() => setPoModalOpen(false)}
+                  className="px-4 py-2 text-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-[#4285F4] text-white font-medium rounded cursor-pointer"
+                >
+                  Send Purchase Order
+                </button>
               </div>
             </form>
           )}
@@ -13534,7 +13594,9 @@ function ReportsView({ subTab, setSubTab, initialReport }) {
     const reportRows = useMemo(() => {
       if (selectedReport === 'sales-cust') {
         const map = {};
-        (state?.invoices || []).forEach((inv) => {
+        (state?.invoices || [])
+          .filter((inv) => inv.status !== 'Cancelled')
+          .forEach((inv) => {
           const cust = (state?.customers || []).find((c) => c.id === inv.customerId);
           const key = inv.customerName || cust?.name || 'Walk-in Customer';
           const invTotal =
@@ -13564,7 +13626,7 @@ function ReportsView({ subTab, setSubTab, initialReport }) {
 
       if (selectedReport === 'purch-vnd') {
         const map = {};
-        const docs = [...(state?.purchaseOrders || []), ...(state?.bills || [])];
+        const docs = [...(state?.purchaseOrders || []), ...(state?.vendorBills || [])];
         docs.forEach((po) => {
           const vend = (state?.vendors || []).find((v) => v.id === po.vendorId);
           const key = po.vendorName || vend?.name || 'Unknown Supplier';
@@ -13587,7 +13649,7 @@ function ReportsView({ subTab, setSubTab, initialReport }) {
           (entry.lines || []).map((line, i) => ({
             id: `${entry.id}-${i}`,
             date: entry.date,
-            memo: entry.memo,
+            memo: entry.description || entry.memo || '',
             accountCode: line.accountCode,
             debit: Number(line.debit) || 0,
             credit: Number(line.credit) || 0,
@@ -14703,29 +14765,33 @@ function CompanySettingsView({ onBack }) {
           };
 
           const handleSaveTemplate = () => {
-  commitState(prev => {
-    const existingList = prev.documentTemplates || [];
-    const exists = existingList.some(t => t.id === draftTemplate.id);
+            const exists = templatesList.some((t) => t.id === draftTemplate.id);
+            const updatedList = exists
+              ? templatesList.map((t) => (t.id === draftTemplate.id ? draftTemplate : t))
+              : [...templatesList, draftTemplate];
 
-    const updatedList = exists
-      ? existingList.map(t => (t.id === draftTemplate.id ? draftTemplate : t))
-      : [...existingList, draftTemplate];
+            const nextActiveTemplate =
+              form.documentTemplate?.id === draftTemplate.id
+                ? draftTemplate
+                : updatedList.find((t) => t.id === form.documentTemplate?.id) ||
+                  updatedList[0] ||
+                  draftTemplate;
 
-    const activeTemplate =
-      updatedList.find(t => t.id === prev.documentTemplate?.id) ||
-      updatedList[0] ||
-      draftTemplate;
-
-    return {
-      ...prev,
-      documentTemplates: updatedList,
-      documentTemplate: activeTemplate,
-    };
-  });
-
-  notify('Document template saved.');
-};
-
+            setTemplatesList(updatedList);
+            setForm((prev) => ({
+              ...prev,
+              documentTemplates: updatedList,
+              documentTemplate: nextActiveTemplate,
+            }));
+            updateCompany({
+              ...form,
+              documentTemplates: updatedList,
+              documentTemplate: nextActiveTemplate,
+            });
+            setEditingTemplateId(null);
+            setDraftTemplate(null);
+            notify('Document template saved.');
+          };
           const currencySymbol = (form.currency || '₹').trim();
           const fontSizePx =
             g.fontSize === 'Small' ? '11px' : g.fontSize === 'Large' ? '14px' : '12.5px';
