@@ -1,0 +1,14 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()], // <-- Added tailwindcss() here!
+  server: {
+    host: true,
+    allowedHosts: [
+      'tin-ext-artist-running.trycloudflare.com',
+      'gnome-intended-rfc-flavor.trycloudflare.com'
+    ]
+  }
+});
