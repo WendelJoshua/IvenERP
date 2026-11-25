@@ -240,6 +240,7 @@ const INITIAL_COMPANY = {
   userInitials: 'WC',
   avatarColor: '#8B5CF6',
   currency: '₹',
+  decimalPlaces: 2,
   defaultTaxRate: 18,
   address: '42 Residency Road',
   addressLine2: 'Ashok Nagar',
@@ -278,7 +279,70 @@ const INITIAL_COMPANY = {
   onboardingCompleted: true,
 };
 
-  const calcDocTotals = (items, products, discountPct = 0) => {
+  // Active decimal places (set by ERPProvider from Company Settings)
+  let ACTIVE_DECIMALS = 2;
+  const DEC = () => ACTIVE_DECIMALS;
+
+  const NUM_ONES = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+  const NUM_TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+  const wordsBelow1000 = (n) => {
+    const parts = [];
+    if (n >= 100) {
+      parts.push(`${NUM_ONES[Math.floor(n / 100)]} hundred`);
+      n %= 100;
+    }
+    if (n >= 20) {
+      parts.push(NUM_TENS[Math.floor(n / 10)] + (n % 10 ? `-${NUM_ONES[n % 10]}` : ''));
+    } else if (n > 0) {
+      parts.push(NUM_ONES[n]);
+    }
+    return parts.join(' ');
+  };
+  const integerToWords = (n, indian) => {
+    n = Math.floor(Math.abs(n));
+    if (n === 0) return 'zero';
+    const units = indian
+      ? [[10000000, 'crore'], [100000, 'lakh'], [1000, 'thousand']]
+      : [[1000000000000, 'trillion'], [1000000000, 'billion'], [1000000, 'million'], [1000, 'thousand']];
+    const out = [];
+    units.forEach(([size, label]) => {
+      if (n >= size) {
+        const q = Math.floor(n / size);
+        out.push(`${integerToWords(q, indian)} ${label}`);
+        n %= size;
+      }
+    });
+    if (n > 0) out.push(wordsBelow1000(n));
+    return out.join(' ');
+  };
+  const CURRENCY_WORDS = {
+    '₹': ['rupees', 'paise', true],
+    '$': ['dollars', 'cents', false],
+    '£': ['pounds', 'pence', false],
+    '€': ['euros', 'cents', false],
+    '¥': ['yen', 'sen', false],
+    'AED': ['dirhams', 'fils', false],
+    'SAR': ['riyals', 'halalas', false],
+  };
+  // e.g. 400 -> "Four hundred only"; 1250.5 -> "One thousand two hundred fifty rupees and fifty paise only"
+  const amountToWords = (amount, currency = '', decimals = 2) => {
+    const cur = String(currency || '').trim();
+    const [major, minor, indian] = CURRENCY_WORDS[cur] || ['', '', false];
+    const abs = Math.abs(Number(amount) || 0);
+    const d = Math.max(0, Math.min(4, Number(decimals) || 0));
+    const fixed = abs.toFixed(Math.max(2, d));
+    const [intPart, fracPart = ''] = fixed.split('.');
+    const whole = Number(intPart);
+    const cents = Number((fracPart + '00').slice(0, 2));
+    let text = integerToWords(whole, indian);
+    if (major) text += ` ${major}`;
+    if (cents > 0 && d > 0) text += ` and ${integerToWords(cents, indian)}${minor ? ` ${minor}` : ''}`;
+    text += ' only';
+    if (Number(amount) < 0) text = `minus ${text}`;
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  };
+
+  const calcDocTotals = (items, products, discountValue = 0, discountType = 'percent') => {
     let subtotal = 0;
     let rawTaxBase = 0;
     const lineTaxDetails = [];
@@ -293,9 +357,17 @@ const INITIAL_COMPANY = {
       lineTaxDetails.push({ lineNet, rate });
     });
 
-    const docDiscRate = Number(discountPct) || 0;
-    const discountAmount = Number((subtotal * (docDiscRate / 100)).toFixed(2));
-    const discountedSubtotal = Number((subtotal - discountAmount).toFixed(2));
+    const dv = Math.max(0, Number(discountValue) || 0);
+    let docDiscRate;
+    let discountAmount;
+    if (discountType === 'amount') {
+      discountAmount = Number(Math.min(dv, subtotal).toFixed(DEC()));
+      docDiscRate = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0;
+    } else {
+      docDiscRate = Math.min(dv, 100);
+      discountAmount = Number((subtotal * (docDiscRate / 100)).toFixed(DEC()));
+    }
+    const discountedSubtotal = Number((subtotal - discountAmount).toFixed(DEC()));
 
     let taxTotal = 0;
     lineTaxDetails.forEach(({ lineNet, rate }) => {
@@ -305,11 +377,12 @@ const INITIAL_COMPANY = {
     });
 
     return {
-      subtotal: Number(subtotal.toFixed(2)),
+      subtotal: Number(subtotal.toFixed(DEC())),
       discountAmount,
       discountedSubtotal,
-      taxTotal: Number(taxTotal.toFixed(2)),
-      total: Number((discountedSubtotal + taxTotal).toFixed(2)),
+      effectivePct: Number(docDiscRate.toFixed(8)),
+      taxTotal: Number(taxTotal.toFixed(DEC())),
+      total: Number((discountedSubtotal + taxTotal).toFixed(DEC())),
     };
   };
 
@@ -519,6 +592,7 @@ const INITIAL_COMPANY = {
 
   export function ERPProvider({ user, isDemoSession, children }) {
     const [state, setState] = useState(null);
+    ACTIVE_DECIMALS = Math.max(0, Math.min(4, Number(state?.company?.decimalPlaces ?? 2) || 0));
     const [loadingWorkspace, setLoadingWorkspace] = useState(true);
     const [syncStatus, setSyncStatus] = useState('synced');
 
@@ -656,7 +730,7 @@ const INITIAL_COMPANY = {
           }
           return `${sign}${currency}${Math.round(abs / 1000)} K`;
         }
-        return `${sign}${currency}${abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        return `${sign}${currency}${abs.toLocaleString('en-US', { minimumFractionDigits: DEC(), maximumFractionDigits: DEC() })}`;
       },
       [state?.company?.currency, state?.userSettings?.preferences?.shorterAmounts]
     );
@@ -683,7 +757,7 @@ const INITIAL_COMPANY = {
           committed,
           available,
           isLowStock,
-          totalValue: Number((onHand * p.cost).toFixed(2)),
+          totalValue: Number((onHand * p.cost).toFixed(DEC())),
         };
       });
     }, [state]);
@@ -699,9 +773,9 @@ const INITIAL_COMPANY = {
           const acc = CHART_OF_ACCOUNTS.find((a) => a.code === line.accountCode);
           if (!acc) return;
           if (acc.normalBalance === 'debit') {
-            map[acc.code] = Number((map[acc.code] + line.debit - line.credit).toFixed(2));
+            map[acc.code] = Number((map[acc.code] + line.debit - line.credit).toFixed(DEC()));
           } else {
-            map[acc.code] = Number((map[acc.code] + line.credit - line.debit).toFixed(2));
+            map[acc.code] = Number((map[acc.code] + line.credit - line.debit).toFixed(DEC()));
           }
         });
       });
@@ -712,8 +786,8 @@ const INITIAL_COMPANY = {
       const cleanLines = lines
         .map((l) => ({
           accountCode: l.accountCode,
-          debit: Number((l.debit || 0).toFixed(2)),
-          credit: Number((l.credit || 0).toFixed(2)),
+          debit: Number((l.debit || 0).toFixed(DEC())),
+          credit: Number((l.credit || 0).toFixed(DEC())),
         }))
         .filter((l) => l.debit > 0 || l.credit > 0);
       if (cleanLines.length === 0) return prevState.journalEntries;
@@ -1001,7 +1075,7 @@ const INITIAL_COMPANY = {
       };
 
       const initialQty = Object.values(newProd.stockByLocation).reduce((a, b) => a + b, 0);
-      const initialVal = Number((initialQty * newProd.cost).toFixed(2));
+      const initialVal = Number((initialQty * newProd.cost).toFixed(DEC()));
 
       commitState((prev) => {
         const updatedJE =
@@ -1280,7 +1354,8 @@ const createQuote = (payload) => {
      ? payload.code.trim()
      : formatDocNumber(rule, 'QOT-', 1 + (state.quotes?.length || 0));
    const docDisc = Number(payload.discountRate ?? payload.discountPct) || 0;
-   const totals = calcDocTotals(payload.items || [], state.products, docDisc);
+   const discountType = payload.discountType === 'amount' ? 'amount' : 'percent';
+   const totals = calcDocTotals(payload.items || [], state.products, docDisc, discountType);
    const today = new Date().toISOString().slice(0, 10);
    const qtDate = payload.date || today;
    const newQuote = {
@@ -1295,7 +1370,8 @@ const createQuote = (payload) => {
      status: payload.status || 'Open',
      recipient: payload.recipient || 'None',
      billingAddress: payload.billingAddress || '',
-     discountPct: docDisc,
+     discountPct: totals.effectivePct,
+     discountType,
      discountRate: docDisc,
      discountAmount: totals.discountAmount,
      subtotal: totals.subtotal,
@@ -1336,10 +1412,12 @@ const createQuote = (payload) => {
      if (!existing) return prev;
      const merged = { ...existing, ...updates };
      const docDisc = Number(merged.discountRate ?? merged.discountPct) || 0;
-     const totals = calcDocTotals(merged.items || [], prev.products, docDisc);
+     const discountType = merged.discountType === 'amount' ? 'amount' : 'percent';
+     const totals = calcDocTotals(merged.items || [], prev.products, docDisc, discountType);
      const updatedQt = {
        ...merged,
-       discountPct: docDisc,
+       discountPct: totals.effectivePct,
+       discountType,
        discountRate: docDisc,
        discountAmount: totals.discountAmount,
        subtotal: totals.subtotal,
@@ -1493,6 +1571,8 @@ const createQuote = (payload) => {
      billingAddress: quote.billingAddress || '',
      paymentTerms: quote.paymentTerms || 'Due on receipt',
      discountRate: Number(quote.discountRate ?? quote.discountPct) || 0,
+     discountType: quote.discountType || 'percent',
+     showAmountInWords: Boolean(quote.showAmountInWords),
      documentNote: quote.documentNote || '',
      deliveryDate: quote.deliveryDate || '',
      deliveryContact: quote.deliveryContact || '',
@@ -1571,7 +1651,7 @@ const createQuote = (payload) => {
               },
             };
           });
-          totalCogs = Number(totalCogs.toFixed(2));
+          totalCogs = Number(totalCogs.toFixed(DEC()));
           if (totalCogs > 0) {
             updatedJE = createJournalEntry(prev, {
               ref: so.id,
@@ -1620,7 +1700,8 @@ const createQuote = (payload) => {
         ? payload.code.trim()
         : formatDocNumber(rule, 'CINV-', 1 + state.invoices.length);
       const docDisc = Number(payload.discountRate ?? payload.discountPct) || 0;
-      const totals = calcDocTotals(payload.items || [], state.products, docDisc);
+      const discountType = payload.discountType === 'amount' ? 'amount' : 'percent';
+   const totals = calcDocTotals(payload.items || [], state.products, docDisc, discountType);
       const today = new Date().toISOString().slice(0, 10);
       const invDate = payload.date || today;
       const terms = payload.paymentTerms || 'Due on receipt';
@@ -1639,7 +1720,8 @@ const createQuote = (payload) => {
         status: isDraft ? 'Draft' : isSettled ? 'Paid' : 'Open',
         recipient: payload.recipient || 'None',
         billingAddress: payload.billingAddress ?? cust?.location ?? '',
-        discountPct: docDisc,
+        discountPct: totals.effectivePct,
+        discountType,
         discountRate: docDisc,
         discountAmount: totals.discountAmount,
         subtotal: totals.subtotal,
@@ -1719,7 +1801,8 @@ const createQuote = (payload) => {
 
         const merged = { ...existing, ...updates };
         const docDisc = Number(merged.discountRate ?? merged.discountPct) || 0;
-        const totals = calcDocTotals(merged.items || [], prev.products, docDisc);
+        const discountType = merged.discountType === 'amount' ? 'amount' : 'percent';
+     const totals = calcDocTotals(merged.items || [], prev.products, docDisc, discountType);
         const dueDate =
           updates.dueDate ||
           computeDueDateFromTerms(merged.date, merged.paymentTerms || 'Due on receipt');
@@ -1735,7 +1818,7 @@ const createQuote = (payload) => {
 
         const cust = prev.customers.find((c) => c.id === merged.customerId);
         const newlySettled = existing.status !== 'Paid' && status === 'Paid' && totals.total > 0;
-        const diffPaid = Math.max(0, Number((amountPaid - (Number(existing.amountPaid) || 0)).toFixed(2)));
+        const diffPaid = Math.max(0, Number((amountPaid - (Number(existing.amountPaid) || 0)).toFixed(DEC())));
 
         let updatedPayments = prev.paymentsReceived;
         let updatedJE = prev.journalEntries;
@@ -1769,7 +1852,8 @@ const createQuote = (payload) => {
           ...merged,
           dueDate,
           status,
-          discountPct: docDisc,
+          discountPct: totals.effectivePct,
+          discountType,
           discountRate: docDisc,
           discountAmount: totals.discountAmount,
           subtotal: totals.subtotal,
@@ -1792,7 +1876,7 @@ const createQuote = (payload) => {
       commitState((prev) => {
         const inv = prev.invoices.find((i) => i.id === invoiceId);
         if (!inv || inv.status === 'Cancelled') return prev;
-        const openBal = Math.max(0, Number(((inv.total || 0) - (inv.amountPaid || 0)).toFixed(2)));
+        const openBal = Math.max(0, Number(((inv.total || 0) - (inv.amountPaid || 0)).toFixed(DEC())));
         const updatedJE =
           openBal > 0 && inv.status !== 'Draft'
             ? createJournalEntry(prev, {
@@ -1878,9 +1962,9 @@ const createQuote = (payload) => {
       commitState((prev) => {
         const inv = prev.invoices.find((i) => i.id === invoiceId);
         if (!inv) return prev;
-        const applied = Math.min(payAmt, Number((inv.total - inv.amountPaid).toFixed(2)));
+        const applied = Math.min(payAmt, Number((inv.total - inv.amountPaid).toFixed(DEC())));
         if (applied <= 0) return prev;
-        const newPaid = Number((inv.amountPaid + applied).toFixed(2));
+        const newPaid = Number((inv.amountPaid + applied).toFixed(DEC()));
         const newStatus = newPaid >= inv.total - 0.01 ? 'Paid' : inv.status;
         const payId = `PAY-${701 + prev.paymentsReceived.length}`;
         const payDate = date || new Date().toISOString().slice(0, 10);
@@ -2060,7 +2144,7 @@ const createQuote = (payload) => {
       commitState((prev) => {
         const po = prev.purchaseOrders.find((p) => p.id === poId);
         if (!po || po.billId) return prev;
-        const billTotal = Number(po.items.reduce((sum, item) => sum + (item.receivedQty || item.qty) * item.unitCost, 0).toFixed(2));
+        const billTotal = Number(po.items.reduce((sum, item) => sum + (item.receivedQty || item.qty) * item.unitCost, 0).toFixed(DEC()));
         const billId = `BILL-${801 + prev.vendorBills.length}`;
         const vendor = prev.vendors.find((v) => v.id === po.vendorId);
         const updatedJE = createJournalEntry(prev, {
@@ -2098,7 +2182,7 @@ const createQuote = (payload) => {
       commitState((prev) => {
         const bill = prev.vendorBills.find((b) => b.id === billId);
         if (!bill || bill.status === 'Paid') return prev;
-        const balance = Number((bill.total - bill.amountPaid).toFixed(2));
+        const balance = Number((bill.total - bill.amountPaid).toFixed(DEC()));
         const vendor = prev.vendors.find((v) => v.id === bill.vendorId);
         const updatedJE = createJournalEntry(prev, {
           ref: bill.id,
@@ -2744,6 +2828,48 @@ const createQuote = (payload) => {
       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium border whitespace-nowrap ${cls}`}>
         {status}
       </span>
+    );
+  }
+
+  // Discount input with % / amount switch; converts the value when the mode changes
+  function DiscountField({ type, value, subtotal, onChange }) {
+    const mode = type === 'amount' ? 'amount' : 'percent';
+    const switchTo = (next) => {
+      if (next === mode) return;
+      const v = Number(value) || 0;
+      const sub = Number(subtotal) || 0;
+      const converted =
+        next === 'amount'
+          ? Number(((sub * Math.min(v, 100)) / 100).toFixed(DEC()))
+          : sub > 0
+            ? Number(((Math.min(v, sub) / sub) * 100).toFixed(4))
+            : 0;
+      onChange({ discountType: next, discountRate: converted });
+    };
+    return (
+      <div className="col-span-7 flex items-center gap-2">
+        <div className="flex-1 border-b border-gray-300 px-3 py-1.5">
+          <input
+            type="number"
+            step={mode === 'amount' ? Math.pow(10, -DEC()) : '0.01'}
+            min={0}
+            max={mode === 'percent' ? 100 : undefined}
+            value={value}
+            onChange={(e) =>
+              onChange({ discountType: mode, discountRate: Math.max(0, Number(e.target.value) || 0) })
+            }
+            className="w-full text-right text-gray-800 focus:outline-none"
+          />
+        </div>
+        <SegmentedChoice
+          value={mode}
+          onChange={switchTo}
+          options={[
+            { label: '%', value: 'percent' },
+            { label: '#', value: 'amount' },
+          ]}
+        />
+      </div>
     );
   }
 
@@ -4329,7 +4455,7 @@ const createQuote = (payload) => {
           isOpen: false,
         },
         ...rawEvents.map((ev) => {
-          running = Number((running + ev.amount).toFixed(2));
+          running = Number((running + ev.amount).toFixed(DEC()));
           return { ...ev, balance: running };
         }),
       ];
@@ -4509,6 +4635,8 @@ const createQuote = (payload) => {
             : [],
           documentNote: '',
           discountRate: Number(cust?.discountTier) || 0,
+          discountType: 'percent',
+          showAmountInWords: false,
           deliveryDate: '',
           deliveryContact: '',
           deliveryAddress: cust?.shippingAddress || cust?.location || '',
@@ -4566,6 +4694,8 @@ const createQuote = (payload) => {
         }),
         documentNote: inv.documentNote || '',
         discountRate: Number(inv.discountRate ?? inv.discountPct) || 0,
+        discountType: inv.discountType || 'percent',
+        showAmountInWords: Boolean(inv.showAmountInWords),
         deliveryDate: inv.deliveryDate || '',
         deliveryContact: inv.deliveryContact || '',
         deliveryAddress: inv.deliveryAddress ?? cust?.shippingAddress ?? cust?.location ?? '',
@@ -4580,8 +4710,8 @@ const createQuote = (payload) => {
 
     // Live computed totals for the Invoice Editor
     const editorTotals = useMemo(
-      () => calcDocTotals(invoiceForm.items || [], state.products, invoiceForm.discountRate || 0),
-      [invoiceForm.items, invoiceForm.discountRate, state.products]
+      () => calcDocTotals(invoiceForm.items || [], state.products, invoiceForm.discountRate || 0, invoiceForm.discountType),
+      [invoiceForm.items, invoiceForm.discountRate, invoiceForm.discountType, state.products]
     );
 
     // Status tab counts & totals for the Invoices page
@@ -4690,11 +4820,11 @@ const createQuote = (payload) => {
               inv.dueDate,
               inv.paymentTerms || 'Due on receipt',
               inv.status,
-              (Number(inv.subtotal) || 0).toFixed(2),
-              (Number(inv.taxTotal) || 0).toFixed(2),
-              (Number(inv.total) || 0).toFixed(2),
-              (Number(inv.amountPaid) || 0).toFixed(2),
-              bal.toFixed(2),
+              (Number(inv.subtotal) || 0).toFixed(DEC()),
+              (Number(inv.taxTotal) || 0).toFixed(DEC()),
+              (Number(inv.total) || 0).toFixed(DEC()),
+              (Number(inv.amountPaid) || 0).toFixed(DEC()),
+              bal.toFixed(DEC()),
             ]
               .map(esc)
               .join(',')
@@ -4720,7 +4850,7 @@ const createQuote = (payload) => {
                 line.unitPrice,
                 line.discPct || 0,
                 line.taxRate || 0,
-                lineTotal.toFixed(2),
+                lineTotal.toFixed(DEC()),
               ]
                 .map(esc)
                 .join(',')
@@ -4838,6 +4968,8 @@ const createQuote = (payload) => {
        items: [],
        documentNote: '',
        discountRate: Number(cust?.discountTier) || 0,
+       discountType: 'percent',
+       showAmountInWords: false,
        deliveryDate: '',
        deliveryContact: '',
        deliveryAddress: cust?.shippingAddress || cust?.location || '',
@@ -4901,6 +5033,8 @@ const createQuote = (payload) => {
      }),
      documentNote: qt.documentNote || qt.notes || '',
      discountRate: Number(qt.discountRate ?? qt.discountPct) || 0,
+     discountType: qt.discountType || 'percent',
+     showAmountInWords: Boolean(qt.showAmountInWords),
      deliveryDate: qt.deliveryDate || '',
      deliveryContact: qt.deliveryContact || '',
      deliveryAddress: qt.deliveryAddress ?? cust?.shippingAddress ?? cust?.location ?? '',
@@ -4914,8 +5048,8 @@ const createQuote = (payload) => {
  };
 
  const quoteEditorTotals = useMemo(
-   () => calcDocTotals(quoteForm.items || [], state.products, quoteForm.discountRate || 0),
-   [quoteForm.items, quoteForm.discountRate, state.products]
+   () => calcDocTotals(quoteForm.items || [], state.products, quoteForm.discountRate || 0, quoteForm.discountType),
+   [quoteForm.items, quoteForm.discountRate, quoteForm.discountType, state.products]
  );
 
  const quoteSummary = useMemo(() => {
@@ -5034,9 +5168,9 @@ const createQuote = (payload) => {
          qt.date,
          qt.expiryDate || '',
          qt.status,
-         totals.subtotal.toFixed(2),
-         totals.taxTotal.toFixed(2),
-         totals.total.toFixed(2),
+         totals.subtotal.toFixed(DEC()),
+         totals.taxTotal.toFixed(DEC()),
+         totals.total.toFixed(DEC()),
        ]
          .map(esc)
          .join(',')
@@ -5778,7 +5912,7 @@ const createQuote = (payload) => {
                                 return;
                               }
                               setSelectedInvoice(openInv);
-                              setPayAmount(String(Math.max(0, (openInv.total - openInv.amountPaid).toFixed(2))));
+                              setPayAmount(String(Math.max(0, (openInv.total - openInv.amountPaid).toFixed(DEC()))));
                               setModal('payment');
                             }}
                             className="w-full text-left px-4 py-2 hover:bg-gray-50 cursor-pointer"
@@ -6257,10 +6391,10 @@ const createQuote = (payload) => {
                               )}
                             </td>
                             <td className="py-3.5 px-5 text-right text-gray-700">
-                              {r.amount.toFixed(2)}
+                              {r.amount.toFixed(DEC())}
                             </td>
                             <td className="py-3.5 px-5 text-right text-gray-700">
-                              {r.balance.toFixed(2)}
+                              {r.balance.toFixed(DEC())}
                             </td>
                           </tr>
                         ))}
@@ -7445,6 +7579,7 @@ const createQuote = (payload) => {
                                                       deliveryAddress: ent.shipping,
                                                       paymentTerms: ent.terms,
                                                       discountRate: ent.discount,
+                                                      discountType: 'percent',
                                                     }));
                                                   }}
                                                   className="w-full text-left px-3.5 py-2 hover:bg-gray-100 flex items-center justify-between text-gray-800 cursor-pointer"
@@ -7745,7 +7880,7 @@ const createQuote = (payload) => {
                                           />
                                         </td>
                                         <td className="py-2.5 px-2 text-right font-medium text-gray-800">
-                                          {lineTotal.toFixed(2)}
+                                          {lineTotal.toFixed(DEC())}
                                         </td>
                                         <td className="py-2.5 px-2">
                                           <select
@@ -7825,30 +7960,15 @@ const createQuote = (payload) => {
                                   Subtotal
                                 </span>
                                 <div className="col-span-7 bg-gray-100/70 px-3 py-2 text-right text-gray-800 rounded-[2px]">
-                                  {quoteEditorTotals.subtotal.toFixed(2)}
+                                  {quoteEditorTotals.subtotal.toFixed(DEC())}
                                 </div>
                               </div>
 
                               <div className="grid grid-cols-12 items-center gap-3">
                                 <span className="col-span-5 text-right font-semibold text-gray-600">
-                                  Discount Rate
+                                  Discount
                                 </span>
-                                <div className="col-span-7 border-b border-gray-300 px-3 py-1.5">
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    min={0}
-                                    max={100}
-                                    value={quoteForm.discountRate}
-                                    onChange={(e) =>
-                                      setQuoteForm({
-                                        ...quoteForm,
-                                        discountRate: Number(e.target.value) || 0,
-                                      })
-                                    }
-                                    className="w-full text-right text-gray-800 focus:outline-none"
-                                  />
-                                </div>
+                                <DiscountField type={quoteForm.discountType} value={quoteForm.discountRate} subtotal={quoteEditorTotals.subtotal} onChange={(patch) => setQuoteForm({ ...quoteForm, ...patch })} />
                               </div>
 
                               <div className="grid grid-cols-12 items-center gap-3">
@@ -7856,7 +7976,7 @@ const createQuote = (payload) => {
                                   Discount Amount
                                 </span>
                                 <div className="col-span-7 bg-gray-100/70 px-3 py-2 text-right text-gray-800 rounded-[2px]">
-                                  {quoteEditorTotals.discountAmount.toFixed(2)}
+                                  {quoteEditorTotals.discountAmount.toFixed(DEC())}
                                 </div>
                               </div>
 
@@ -7865,7 +7985,7 @@ const createQuote = (payload) => {
                                   VAT
                                 </span>
                                 <div className="col-span-7 bg-gray-100/70 px-3 py-2 text-right text-gray-800 rounded-[2px]">
-                                  {quoteEditorTotals.taxTotal.toFixed(2)}
+                                  {quoteEditorTotals.taxTotal.toFixed(DEC())}
                                 </div>
                               </div>
 
@@ -7874,9 +7994,26 @@ const createQuote = (payload) => {
                                   Total
                                 </span>
                                 <div className="col-span-7 bg-gray-100/70 px-3 py-2 text-right font-semibold text-gray-900 rounded-[2px]">
-                                  {quoteEditorTotals.total.toFixed(2)}
+                                  {quoteEditorTotals.total.toFixed(DEC())}
                                 </div>
                               </div>
+
+                              <div className="grid grid-cols-12 items-center gap-3">
+                                <span className="col-span-5 text-right font-semibold text-gray-600">
+                                  Show amount in words
+                                </span>
+                                <div className="col-span-7">
+                                  <OneUpOnOffToggle
+                                    value={Boolean(quoteForm.showAmountInWords)}
+                                    onChange={(val) => setQuoteForm({ ...quoteForm, showAmountInWords: val })}
+                                  />
+                                </div>
+                              </div>
+                              {quoteForm.showAmountInWords && (
+                                <p className="text-right text-[11px] italic text-gray-500">
+                                  {amountToWords(quoteEditorTotals.total, state.company?.currency, DEC())}
+                                </p>
+                              )}
                             </div>
                           </div>
 
@@ -8019,7 +8156,8 @@ const createQuote = (payload) => {
                             const totals = calcDocTotals(
                               previewQuote.items || [],
                               state.products,
-                              previewQuote.discountRate ?? previewQuote.discountPct ?? 0
+                              previewQuote.discountRate ?? previewQuote.discountPct ?? 0,
+                              previewQuote.discountType
                             );
 
                             return (
@@ -8168,12 +8306,12 @@ const createQuote = (payload) => {
                                             {tplDoc.showUnitPrice !== false && (
                                               <td className="py-2 px-2 text-right">
                                                 {currency}
-                                                {(Number(line.unitPrice) || 0).toFixed(2)}
+                                                {(Number(line.unitPrice) || 0).toFixed(DEC())}
                                               </td>
                                             )}
                                             <td className="py-2 px-2 text-right font-medium">
                                               {currency}
-                                              {amt.toFixed(2)}
+                                              {amt.toFixed(DEC())}
                                             </td>
                                           </tr>
                                         );
@@ -8187,7 +8325,7 @@ const createQuote = (payload) => {
                                         <span>Subtotal</span>
                                         <span>
                                           {currency}
-                                          {totals.subtotal.toFixed(2)}
+                                          {totals.subtotal.toFixed(DEC())}
                                         </span>
                                       </div>
                                       {totals.discountAmount > 0 && (
@@ -8195,7 +8333,7 @@ const createQuote = (payload) => {
                                           <span>Discount</span>
                                           <span>
                                             -{currency}
-                                            {totals.discountAmount.toFixed(2)}
+                                            {totals.discountAmount.toFixed(DEC())}
                                           </span>
                                         </div>
                                       )}
@@ -8203,7 +8341,7 @@ const createQuote = (payload) => {
                                         <span>VAT</span>
                                         <span>
                                           {currency}
-                                          {totals.taxTotal.toFixed(2)}
+                                          {totals.taxTotal.toFixed(DEC())}
                                         </span>
                                       </div>
                                       <div
@@ -8213,9 +8351,14 @@ const createQuote = (payload) => {
                                         <span>Total</span>
                                         <span>
                                           {currency}
-                                          {totals.total.toFixed(2)}
+                                          {totals.total.toFixed(DEC())}
                                         </span>
                                       </div>
+                                      {previewQuote.showAmountInWords && (
+                                        <div className="px-2 pt-1 text-[10.5px] italic text-right">
+                                          Amount in words: {amountToWords(totals.total, currency, DEC())}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -8340,6 +8483,7 @@ const createQuote = (payload) => {
                             deliveryAddress: item.shipping,
                             paymentTerms: item.terms,
                             discountRate: item.discount,
+                            discountType: 'percent',
                           }));
                           setEntityPickerModalOpen(false);
                         }}
@@ -8799,10 +8943,10 @@ const createQuote = (payload) => {
                                       {p.description || ''}
                                     </td>
                                     <td className="py-2.5 px-3 text-right text-gray-800">
-                                      {(Number(p.price) || 0).toFixed(2)}
+                                      {(Number(p.price) || 0).toFixed(DEC())}
                                     </td>
                                     <td className="py-2.5 px-3 text-right text-gray-500">
-                                      {(Number(p.cost) || 0).toFixed(2)}
+                                      {(Number(p.cost) || 0).toFixed(DEC())}
                                     </td>
                                     <td className="py-2.5 px-3 text-gray-700">
                                       {p.type || 'Product'}
@@ -9169,7 +9313,8 @@ const createQuote = (payload) => {
                         const totals = calcDocTotals(
                           docObj.items || [],
                           state.products,
-                          docObj.discountRate ?? docObj.discountPct ?? 0
+                          docObj.discountRate ?? docObj.discountPct ?? 0,
+                          docObj.discountType
                         );
                         const sizeClass =
                           g.fontSize === 'Small'
@@ -9338,12 +9483,12 @@ const createQuote = (payload) => {
                                         {d.showUnitPrice && (
                                           <td className="py-2 px-2 text-right">
                                             {currency}
-                                            {(Number(line.unitPrice) || 0).toFixed(2)}
+                                            {(Number(line.unitPrice) || 0).toFixed(DEC())}
                                           </td>
                                         )}
                                         <td className="py-2 px-2 text-right font-medium">
                                           {currency}
-                                          {amt.toFixed(2)}
+                                          {amt.toFixed(DEC())}
                                         </td>
                                       </tr>
                                     );
@@ -9358,7 +9503,7 @@ const createQuote = (payload) => {
                                     <span>Subtotal</span>
                                     <span>
                                       {currency}
-                                      {totals.subtotal.toFixed(2)}
+                                      {totals.subtotal.toFixed(DEC())}
                                     </span>
                                   </div>
                                   {totals.discountAmount > 0 && (
@@ -9366,7 +9511,7 @@ const createQuote = (payload) => {
                                       <span>Discount</span>
                                       <span>
                                         -{currency}
-                                        {totals.discountAmount.toFixed(2)}
+                                        {totals.discountAmount.toFixed(DEC())}
                                       </span>
                                     </div>
                                   )}
@@ -9374,7 +9519,7 @@ const createQuote = (payload) => {
                                     <span>VAT</span>
                                     <span>
                                       {currency}
-                                      {totals.taxTotal.toFixed(2)}
+                                      {totals.taxTotal.toFixed(DEC())}
                                     </span>
                                   </div>
                                   <div
@@ -9384,9 +9529,14 @@ const createQuote = (payload) => {
                                     <span>Total</span>
                                     <span>
                                       {currency}
-                                      {totals.total.toFixed(2)}
+                                      {totals.total.toFixed(DEC())}
                                     </span>
                                   </div>
+                                  {docObj.showAmountInWords && (
+                                    <div className="px-2 pt-1 text-[10.5px] italic text-right">
+                                      Amount in words: {amountToWords(totals.total, currency, DEC())}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -10370,7 +10520,7 @@ const createQuote = (payload) => {
                           const cust = state.customers.find((c) => c.id === inv.customerId);
                           const bal = Math.max(
                             0,
-                            Number(((inv.total || 0) - (inv.amountPaid || 0)).toFixed(2))
+                            Number(((inv.total || 0) - (inv.amountPaid || 0)).toFixed(DEC()))
                           );
                           return (
                             <tr key={inv.id} className="hover:bg-gray-50/60">
@@ -10488,6 +10638,7 @@ const createQuote = (payload) => {
                                       paymentTerms: terms,
                                       dueDate: computeDueDateFromTerms(prev.date, terms),
                                       discountRate: Number(nextCust?.discountTier) || 0,
+                                      discountType: 'percent',
                                     }));
                                   }}
                                   className="w-full border-b border-gray-300 py-1.5 text-[13px] text-gray-800 bg-transparent focus:outline-none focus:border-[#4285F4]"
@@ -10776,7 +10927,7 @@ const createQuote = (payload) => {
                                     </td>
 
                                     <td className="py-2.5 px-2 text-right font-medium text-gray-800">
-                                      {lineTotal.toFixed(2)}
+                                      {lineTotal.toFixed(DEC())}
                                     </td>
 
                                     <td className="py-2.5 px-2">
@@ -10858,30 +11009,15 @@ const createQuote = (payload) => {
                                 Subtotal
                               </span>
                               <div className="col-span-7 bg-gray-100/70 px-3 py-2 text-right text-gray-800 rounded-[2px]">
-                                {editorTotals.subtotal.toFixed(2)}
+                                {editorTotals.subtotal.toFixed(DEC())}
                               </div>
                             </div>
 
                             <div className="grid grid-cols-12 items-center gap-3">
                               <span className="col-span-5 text-right font-semibold text-gray-600">
-                                Discount Rate
+                                Discount
                               </span>
-                              <div className="col-span-7 border-b border-gray-300 px-3 py-1.5">
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min={0}
-                                  max={100}
-                                  value={invoiceForm.discountRate}
-                                  onChange={(e) =>
-                                    setInvoiceForm({
-                                      ...invoiceForm,
-                                      discountRate: Number(e.target.value) || 0,
-                                    })
-                                  }
-                                  className="w-full text-right text-gray-800 focus:outline-none"
-                                />
-                              </div>
+                              <DiscountField type={invoiceForm.discountType} value={invoiceForm.discountRate} subtotal={editorTotals.subtotal} onChange={(patch) => setInvoiceForm({ ...invoiceForm, ...patch })} />
                             </div>
 
                             <div className="grid grid-cols-12 items-center gap-3">
@@ -10889,7 +11025,7 @@ const createQuote = (payload) => {
                                 Discount Amount
                               </span>
                               <div className="col-span-7 bg-gray-100/70 px-3 py-2 text-right text-gray-800 rounded-[2px]">
-                                {editorTotals.discountAmount.toFixed(2)}
+                                {editorTotals.discountAmount.toFixed(DEC())}
                               </div>
                             </div>
 
@@ -10898,7 +11034,7 @@ const createQuote = (payload) => {
                                 VAT
                               </span>
                               <div className="col-span-7 bg-gray-100/70 px-3 py-2 text-right text-gray-800 rounded-[2px]">
-                                {editorTotals.taxTotal.toFixed(2)}
+                                {editorTotals.taxTotal.toFixed(DEC())}
                               </div>
                             </div>
 
@@ -10907,9 +11043,26 @@ const createQuote = (payload) => {
                                 Total
                               </span>
                               <div className="col-span-7 bg-gray-100/70 px-3 py-2 text-right font-semibold text-gray-900 rounded-[2px]">
-                                {editorTotals.total.toFixed(2)}
+                                {editorTotals.total.toFixed(DEC())}
                               </div>
                             </div>
+
+                            <div className="grid grid-cols-12 items-center gap-3">
+                              <span className="col-span-5 text-right font-semibold text-gray-600">
+                                Show amount in words
+                              </span>
+                              <div className="col-span-7">
+                                <OneUpOnOffToggle
+                                  value={Boolean(invoiceForm.showAmountInWords)}
+                                  onChange={(val) => setInvoiceForm({ ...invoiceForm, showAmountInWords: val })}
+                                />
+                              </div>
+                            </div>
+                            {invoiceForm.showAmountInWords && (
+                              <p className="text-right text-[11px] italic text-gray-500">
+                                {amountToWords(editorTotals.total, state.company?.currency, DEC())}
+                              </p>
+                            )}
                           </div>
                         </div>
 
@@ -11111,7 +11264,7 @@ const createQuote = (payload) => {
                             invoiceForm.status === 'Paid'
                               ? totalAmt
                               : Number(existingInv?.amountPaid) || 0;
-                          const balanceDue = Math.max(0, Number((totalAmt - paidAmt).toFixed(2)));
+                          const balanceDue = Math.max(0, Number((totalAmt - paidAmt).toFixed(DEC())));
                           const invPayments = editingInvoiceId
                             ? state.paymentsReceived.filter((p) => p.invoiceId === editingInvoiceId)
                             : [];
@@ -11132,13 +11285,13 @@ const createQuote = (payload) => {
                                   {formatShortDate(invoiceForm.date)}
                                 </div>
                                 <div className="font-medium text-[13px]">
-                                  {totalAmt.toFixed(2)}
+                                  {totalAmt.toFixed(DEC())}
                                 </div>
                                 <div className="font-medium text-[13px]">
-                                  {paidAmt.toFixed(2)}
+                                  {paidAmt.toFixed(DEC())}
                                 </div>
                                 <div className="font-medium text-[13px]">
-                                  {balanceDue.toFixed(2)}
+                                  {balanceDue.toFixed(DEC())}
                                 </div>
                               </div>
 
@@ -11228,7 +11381,7 @@ const createQuote = (payload) => {
                                           </td>
                                           <td className="py-2.5 px-2 text-gray-700">{pmt.method}</td>
                                           <td className="py-2.5 px-2 font-medium text-emerald-700">
-                                            {Number(pmt.amount).toFixed(2)}
+                                            {Number(pmt.amount).toFixed(DEC())}
                                           </td>
                                           <td className="py-2.5 px-2 text-gray-600">
                                             {pmt.reference || '—'}
@@ -11360,7 +11513,7 @@ const createQuote = (payload) => {
                             (
                               (Number(previewInvoice.total) || 0) -
                               (Number(previewInvoice.amountPaid) || 0)
-                            ).toFixed(2)
+                            ).toFixed(DEC())
                           )
                         );
                         const invPayments = state.paymentsReceived.filter(
@@ -11445,7 +11598,7 @@ const createQuote = (payload) => {
                                 </div>
                                 <div className="font-semibold">
                                   Amount due: {currency}
-                                  {balDue.toFixed(2)}
+                                  {balDue.toFixed(DEC())}
                                 </div>
                                 {previewInvoice.sentDate && (
                                   <div className="text-[11px] font-semibold opacity-85">
@@ -11543,12 +11696,12 @@ const createQuote = (payload) => {
                                         {tplDoc.showUnitPrice !== false && (
                                           <td className="py-2 px-2 text-right">
                                             {currency}
-                                            {(Number(line.unitPrice) || 0).toFixed(2)}
+                                            {(Number(line.unitPrice) || 0).toFixed(DEC())}
                                           </td>
                                         )}
                                         <td className="py-2 px-2 text-right font-medium">
                                           {currency}
-                                          {amt.toFixed(2)}
+                                          {amt.toFixed(DEC())}
                                         </td>
                                       </tr>
                                     );
@@ -11563,15 +11716,17 @@ const createQuote = (payload) => {
                                     <span>Subtotal</span>
                                     <span>
                                       {currency}
-                                      {(Number(previewInvoice.subtotal) || 0).toFixed(2)}
+                                      {(Number(previewInvoice.subtotal) || 0).toFixed(DEC())}
                                     </span>
                                   </div>
                                   {Number(previewInvoice.discountAmount) > 0 && (
                                     <div className="flex justify-between px-2 opacity-85">
-                                      <span>Discount ({previewInvoice.discountRate || 0}%)</span>
+                                      <span>
+                                        Discount{previewInvoice.discountType === 'amount' ? '' : ` (${Number(previewInvoice.discountRate) || 0}%)`}
+                                      </span>
                                       <span>
                                         -{currency}
-                                        {Number(previewInvoice.discountAmount).toFixed(2)}
+                                        {Number(previewInvoice.discountAmount).toFixed(DEC())}
                                       </span>
                                     </div>
                                   )}
@@ -11579,7 +11734,7 @@ const createQuote = (payload) => {
                                     <span>VAT</span>
                                     <span>
                                       {currency}
-                                      {(Number(previewInvoice.taxTotal) || 0).toFixed(2)}
+                                      {(Number(previewInvoice.taxTotal) || 0).toFixed(DEC())}
                                     </span>
                                   </div>
                                   <div
@@ -11589,9 +11744,14 @@ const createQuote = (payload) => {
                                     <span>Total</span>
                                     <span>
                                       {currency}
-                                      {(Number(previewInvoice.total) || 0).toFixed(2)}
+                                      {(Number(previewInvoice.total) || 0).toFixed(DEC())}
                                     </span>
                                   </div>
+                                  {previewInvoice.showAmountInWords && (
+                                    <div className="px-2 pt-1 text-[10.5px] italic text-right">
+                                      Amount in words: {amountToWords((Number(previewInvoice.total) || 0), currency, DEC())}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -11606,7 +11766,7 @@ const createQuote = (payload) => {
                                   {invPayments.map((p) => (
                                     <li key={p.id}>
                                       {currency}
-                                      {Number(p.amount).toFixed(2)} on {formatShortDate(p.date)}
+                                      {Number(p.amount).toFixed(DEC())} on {formatShortDate(p.date)}
                                     </li>
                                   ))}
                                 </ul>
@@ -13223,8 +13383,8 @@ const submitPurchaseOrder = (e) => {
     const [jeForm, setJeForm] = useState({ description: '', debitAccount: '6100', creditAccount: '1000', amount: '100' });
 
     const incomeTotal = accountBalances['4000'] || 0;
-    const expenseTotal = Number(((accountBalances['5000'] || 0) + (accountBalances['6100'] || 0)).toFixed(2));
-    const profitTotal = Number((incomeTotal - expenseTotal).toFixed(2));
+    const expenseTotal = Number(((accountBalances['5000'] || 0) + (accountBalances['6100'] || 0)).toFixed(DEC()));
+    const profitTotal = Number((incomeTotal - expenseTotal).toFixed(DEC()));
     const cashBalance = accountBalances['1000'] || 0;
 
     const depositsTotal = state.paymentsReceived.reduce((s, p) => s + p.amount, 0);
@@ -13636,7 +13796,7 @@ function ReportsView({ subTab, setSubTab, initialReport }) {
     const revenue = accountBalances['4000'] || 0;
     const cogs = accountBalances['5000'] || 0;
     const opEx = accountBalances['6100'] || 0;
-    const netIncome = Number((revenue - cogs - opEx).toFixed(2));
+    const netIncome = Number((revenue - cogs - opEx).toFixed(DEC()));
 
     return (
       <div>
@@ -14445,6 +14605,20 @@ function CompanySettingsView({ onBack }) {
                 }
                 className={inputCls}
               />
+            </div>
+          </div>
+
+          <div className={rowCls}>
+            <label className={labelCls}>Decimal Places</label>
+            <div className="md:col-span-8 flex items-center gap-4">
+              <SegmentedChoice
+                value={Number(form.decimalPlaces ?? 2)}
+                onChange={(val) => setForm({ ...form, decimalPlaces: val })}
+                options={[0, 1, 2, 3, 4].map((n) => ({ label: String(n), value: n }))}
+              />
+              <span className="text-xs text-gray-500">
+                Digits after the decimal point for amounts (e.g. {(1234.5678).toFixed(Number(form.decimalPlaces ?? 2))})
+              </span>
             </div>
           </div>
 
